@@ -212,7 +212,7 @@ app.layout = dbc.Container([
     html.Div([
         
         html.Div([
-            html.Img(src="/assets/logo_ecog.jpg", style={'height': '70px', 'marginRight': '15px'}),
+            html.Img(src="/assets/logo_ecog.png", style={'height': '70px', 'marginRight': '15px'}),
             html.H2("EcoG", style={'fontWeight': 'bold', 'margin': '0'})
         ], style={'display': 'flex', 'alignItems': 'center'}),
         
@@ -383,8 +383,7 @@ def update_map_elements(pollutant, tab, download_status):
             interactive_points.append(
                 dl.CircleMarker(
                     id=unique_id, 
-                    center=[row['lat'], row['lon']], 
-                    radius=6,
+                    center=[row['lat'], row['lon']], radius=6,
                     color=color, fill=True, fillOpacity=0.9, weight=1,
                     children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
                 )
@@ -394,13 +393,15 @@ def update_map_elements(pollutant, tab, download_status):
                 intensity = min(val / t[1], 1.0) 
                 heat_data.append([row['lat'], row['lon'], intensity])
 
-            # Brak Tooltip i Popup dla Heatmapy
             interactive_points.append(
                 dl.CircleMarker(
                     id=f"point-{unique_id}", 
-                    center=[row['lat'], row['lon']], 
-                    radius=3,
-                    color="#333", fillColor=color, fillOpacity=1, weight=1
+                    center=[row['lat'], row['lon']], radius=3, 
+                    color="#333", fillColor=color, fillOpacity=1, weight=1,
+                    children=[
+                        dl.Tooltip(row['name'], permanent=False, direction="top", offset=[0, -10]),
+                        dl.Popup([html.B(row['name']), html.Br(), display_text]) 
+                    ]
                 )
             )
 
@@ -408,10 +409,9 @@ def update_map_elements(pollutant, tab, download_status):
         children.append(
             dl.Heatmap(
                 data=heat_data,
-                radius=35, 
-                blur=25,   
-                gradient={"0.4": '#2ECC71', "0.7": '#F39C12', "1.0": '#E74C3C'},
-                minOpacity=0.3
+                max=1.0,
+                radius=25, 
+                blur=15
             )
         )
 
