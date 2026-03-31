@@ -15,7 +15,6 @@ def pobierz_dzisiejsze_dane():
     file_path = 'baza_powietrza_polska3.csv'
     dzisiejsza_data = datetime.date.today().strftime('%Y-%m-%d')
     
-    # Sprawdzenie, czy dzisiejsze dane już istnieją
     if os.path.exists(file_path):
         try:
             df_check = pd.read_csv(file_path)
@@ -24,10 +23,11 @@ def pobierz_dzisiejsze_dane():
         except Exception:
             pass 
 
+    print("\n--- ROZPOCZĘTO POBIERANIE W TLE (CAŁA POLSKA) ---")
     API_BASE = "https://api.gios.gov.pl/pjp-api/v1/rest"
     HEADERS = {
         "Accept": "application/json, text/plain, */*",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
     def wyciagnij_liste(dane):
@@ -50,6 +50,7 @@ def pobierz_dzisiejsze_dane():
         return None
 
     try:
+        print("Łączenie z serwerem i pobieranie listy stacji...")
         res = requests.get(f"{API_BASE}/station/findAll?size=500", headers=HEADERS)
         res.raise_for_status()
         stations = wyciagnij_liste(res.json())
@@ -77,6 +78,7 @@ def pobierz_dzisiejsze_dane():
                  city_name = station_name.split(',')[0].split('-')[0].strip()
 
             if st_id and lat and lon and station_name:
+                print(f"[{index+1}/{total_stations}] Przetwarzam: {station_name}")
                 station_data = {
                     "id": int(st_id),
                     "city": city_name,
@@ -140,27 +142,31 @@ def pobierz_dzisiejsze_dane():
                 df.to_csv(file_path, mode='a', header=False, index=False, encoding='utf-8-sig')
             else:
                 df.to_csv(file_path, index=False, encoding='utf-8-sig')
+            print("--- ZAKOŃCZONO POBIERANIE SUKCESEM ---")
             return "Ukończono!"
 
     except Exception as e:
+        print(f"Błąd sieciowy w tle: {e}")
         return "Błąd połączenia sieciowego."
 
 
-#  ODCZYT BAZY DO PAMIĘCI
+# ODCZYT BAZY DO PAMIĘCI
 def wczytaj_dane_z_csv():
     file_path = 'baza_powietrza_polska3.csv'
     if not os.path.exists(file_path):
+        print("INFO: Brak pliku bazy, aplikacja startuje pusta.")
         return pd.DataFrame(), []
     try:
         df_raw = pd.read_csv(file_path)
         if 'date' not in df_raw.columns:
             df_raw.columns = ['id', 'city', 'name', 'lat', 'lon', 'date', 'pm10', 'pm25', 'no2', 'so2', 'co']
+            
+        df_raw = df_raw.drop_duplicates(subset=['id', 'date'], keep='last')
         df_raw = df_raw.sort_values('date') 
         dates = df_raw['date'].unique().tolist()[-7:] 
         data = []
         params = ['pm10', 'pm25', 'no2', 'so2', 'co']
         
-        # Grupowanie po ID stacji 
         for st_id, group in df_raw.groupby('id'):
             group = group.tail(7) 
             latest = group.iloc[-1] 
@@ -184,14 +190,14 @@ def wczytaj_dane_z_csv():
         print(f"Błąd odczytu CSV: {e}")
         return pd.DataFrame(), []
 
-# Inicjalizacja startowa
 GLOBAL_DF_INIT, _ = wczytaj_dane_z_csv()
 POLAND_BORDER = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/poland.geojson"
 DEFAULT_STATION = GLOBAL_DF_INIT.iloc[0]['id'] if not GLOBAL_DF_INIT.empty else 0
 
-# INICJALIZACJA APLIKACJI
+# INICJALIZACJA APLIKACJI 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME])
 server = app.server
+
 
 color_mode_switch = html.Span(
     [
@@ -199,30 +205,36 @@ color_mode_switch = html.Span(
         dbc.Switch(id="switch", value=True, className="d-inline-block ms-1", persistence=True),
         dbc.Label(className="fa fa-sun", html_for="switch"),
     ],
-    style={"float": "right", "marginTop": "15px", "fontSize": "20px"}
+    style={"fontSize": "20px", "marginTop": "5px"}
 )
 
 #  LAYOUT 
 app.layout = dbc.Container([
+    
+   
     html.Div([
+        
+        # Logo
         html.Div([
-            dbc.Button([html.I(className="fa fa-download me-2"), "Pobierz dane"], id="download-btn", color="success", size="md", className="me-3"),
-            dcc.Loading(
-                id="loading-download",
-                type="circle",
-                color="#2ECC71",
-                children=html.Div(id="download-status", style={'display': 'inline-block', 'fontWeight': 'bold', 'color': '#2ECC71', 'marginTop': '5px'})
-            )
-        ], style={'float': 'left', 'marginTop': '15px', 'marginLeft': '20px', 'display': 'flex', 'alignItems': 'center'}),
+            html.Img(src="/assets/logo_ecog.jpg", style={'height': '70px', 'marginRight': '15px'}),
+            html.H2("EcoG", style={'fontWeight': 'bold', 'margin': '0'})
+        ], style={'display': 'flex', 'alignItems': 'center'}),
         
-        color_mode_switch,
-        
+        # Przycisk Pobierz)
         html.Div([
-            html.Img(src="/assets/logo_ecog.png", style={'height': '90px', 'float': 'left', 'marginTop': '-10px'}),
-            html.H2("EcoG", style={'marginLeft': '110px', 'paddingTop': '20px', 'fontWeight': 'bold'})
-        ], style={'clear': 'both', 'paddingTop': '10px'})
+            color_mode_switch,
+            html.Div([
+                dbc.Button([html.I(className="fa fa-download me-2"), "Pobierz dane"], id="download-btn", color="success", size="md"),
+                dcc.Loading(
+                    id="loading-download",
+                    type="circle",
+                    color="#2ECC71",
+                    children=html.Div(id="download-status", style={'fontWeight': 'bold', 'color': '#2ECC71', 'marginTop': '5px', 'fontSize': '12px', 'textAlign': 'center'})
+                )
+            ], style={'marginLeft': '25px', 'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center'})
+        ], style={'display': 'flex', 'alignItems': 'flex-start'})
         
-    ], style={'padding': '10px', 'borderBottom': '2px solid #005b9f', 'marginBottom': '20px'}),
+    ], style={'padding': '15px 20px', 'borderBottom': '2px solid #005b9f', 'marginBottom': '20px', 'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center'}),
 
     html.Div([
         html.Div([
@@ -277,7 +289,7 @@ app.layout = dbc.Container([
     ], className="row")
 ], fluid=True, style={'padding': '20px'})
 
-# LOGIKA APLIKACJI
+# LOGIKA APLIKACJI 
 
 clientside_callback(
     """
@@ -362,7 +374,7 @@ def update_map_elements(pollutant, tab, download_status):
     else:
         children.append(dl.GeoJSON(url=POLAND_BORDER, style={'color': '#888', 'fillOpacity': 0, 'weight': 2}))
 
-    heat_blobs = []
+    heat_data = [] 
     interactive_points = []
 
     for _, row in temp_df.iterrows():
@@ -373,34 +385,49 @@ def update_map_elements(pollutant, tab, download_status):
         unique_id = f"marker-{row['id']}-{pollutant}-{tab}"
         
         if tab == 'tab-stations':
+            # ZWYKŁA MAPA 
             interactive_points.append(
                 dl.CircleMarker(
                     id=unique_id, 
-                    center=[row['lat'], row['lon']], radius=12,
-                    color=color, fill=True, fillOpacity=0.9, weight=2,
+                    center=[row['lat'], row['lon']], 
+                    radius=6,
+                    color=color, fill=True, fillOpacity=0.9, weight=1,
                     children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
                 )
             )
         else:
-            heat_blobs.append(
-                dl.Circle(
-                    id=f"blob-{unique_id}", 
-                    center=[row['lat'], row['lon']], 
-                    radius=65000, 
-                    fillColor=color, color="transparent", 
-                    fill=True, fillOpacity=0.2, interactive=False
-                )
-            )
+            # PRZYGOTOWANIE DO HEATMAPY
+            if val > 0:
+                intensity = min(val / t[1], 1.0) 
+                heat_data.append([row['lat'], row['lon'], intensity])
+
             interactive_points.append(
                 dl.CircleMarker(
                     id=f"point-{unique_id}", 
-                    center=[row['lat'], row['lon']], radius=5, 
-                    color="#333", fillColor=color, fillOpacity=1, weight=1
+                    center=[row['lat'], row['lon']], 
+                    radius=3,
+                    color="#333", fillColor=color, fillOpacity=1, weight=1,
+                    children=[
+                        dl.Tooltip(row['name'], permanent=False, direction="top", offset=[0, -10]),
+                        dl.Popup([html.B(row['name']), html.Br(), display_text]) 
+                    ]
                 )
             )
 
-    children.append(dl.LayerGroup(heat_blobs))
+  
+    if tab == 'tab-heatmap':
+        children.append(
+            dl.Heatmap(
+                data=heat_data,
+                radius=35, 
+                blur=25,   
+                gradient={0.4: '#2ECC71', 0.7: '#F39C12', 1.0: '#E74C3C'},
+                minOpacity=0.3
+            )
+        )
+
     children.append(dl.LayerGroup(interactive_points))
+    
     legend_html = html.Div([
         html.P("Legenda (zgodnie z normami):", style={'fontWeight': 'bold'}),
         html.Div([html.Span("●", style={'color': '#2ECC71'}), f" Dobra (<= {t[0]})"]),
