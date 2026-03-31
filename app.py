@@ -149,7 +149,6 @@ def pobierz_dzisiejsze_dane():
         print(f"Błąd sieciowy w tle: {e}")
         return "Błąd połączenia sieciowego."
 
-
 # ODCZYT BAZY DO PAMIĘCI
 def wczytaj_dane_z_csv():
     file_path = 'baza_powietrza_polska3.csv'
@@ -198,7 +197,6 @@ DEFAULT_STATION = GLOBAL_DF_INIT.iloc[0]['id'] if not GLOBAL_DF_INIT.empty else 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME])
 server = app.server
 
-
 color_mode_switch = html.Span(
     [
         dbc.Label(className="fa fa-moon", html_for="switch"),
@@ -211,16 +209,13 @@ color_mode_switch = html.Span(
 #  LAYOUT 
 app.layout = dbc.Container([
     
-   
     html.Div([
         
-        # Logo
         html.Div([
             html.Img(src="/assets/logo_ecog.jpg", style={'height': '70px', 'marginRight': '15px'}),
             html.H2("EcoG", style={'fontWeight': 'bold', 'margin': '0'})
         ], style={'display': 'flex', 'alignItems': 'center'}),
         
-        # Przycisk Pobierz)
         html.Div([
             color_mode_switch,
             html.Div([
@@ -385,7 +380,6 @@ def update_map_elements(pollutant, tab, download_status):
         unique_id = f"marker-{row['id']}-{pollutant}-{tab}"
         
         if tab == 'tab-stations':
-            # ZWYKŁA MAPA 
             interactive_points.append(
                 dl.CircleMarker(
                     id=unique_id, 
@@ -396,32 +390,27 @@ def update_map_elements(pollutant, tab, download_status):
                 )
             )
         else:
-            # PRZYGOTOWANIE DO HEATMAPY
             if val > 0:
                 intensity = min(val / t[1], 1.0) 
                 heat_data.append([row['lat'], row['lon'], intensity])
 
+            # Brak Tooltip i Popup dla Heatmapy
             interactive_points.append(
                 dl.CircleMarker(
                     id=f"point-{unique_id}", 
                     center=[row['lat'], row['lon']], 
                     radius=3,
-                    color="#333", fillColor=color, fillOpacity=1, weight=1,
-                    children=[
-                        dl.Tooltip(row['name'], permanent=False, direction="top", offset=[0, -10]),
-                        dl.Popup([html.B(row['name']), html.Br(), display_text]) 
-                    ]
+                    color="#333", fillColor=color, fillOpacity=1, weight=1
                 )
             )
 
-  
     if tab == 'tab-heatmap':
         children.append(
             dl.Heatmap(
                 data=heat_data,
                 radius=35, 
                 blur=25,   
-                gradient={0.4: '#2ECC71', 0.7: '#F39C12', 1.0: '#E74C3C'},
+                gradient={"0.4": '#2ECC71', "0.7": '#F39C12', "1.0": '#E74C3C'},
                 minOpacity=0.3
             )
         )
