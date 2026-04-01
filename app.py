@@ -10,7 +10,28 @@ import requests
 import datetime
 import time
 import threading
+from sqlalchemy import create_engine
 
+# --- KONFIGURACJA BAZY DANYCH ---
+# Wklej poniżej swój External Database URL z Rendera do testów lokalnych (w Spyderze)
+LOKALNY_URL_BAZY = "postgresql://ecog_db_user:EicIZA5p5bMVtiv86K2ox82hCc5S6qEZ@dpg-d76enj8ule4c73eskkag-a.frankfurt-postgres.render.com/ecog_db"
+
+# Pobieramy ukryte hasło z serwera (jeśli działa na Render) lub używamy lokalnego (w Spyderze)
+db_url = os.environ.get('DATABASE_URL', LOKALNY_URL_BAZY)
+
+# Ważna łatka: SQLAlchemy wymaga prefiksu 'postgresql://' zamiast 'postgres://'
+if db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+# Tworzymy "silnik", czyli stałe połączenie z bazą
+if db_url and db_url != "postgresql://ecog_db_user:EicIZA5p5bMVtiv86K2ox82hCc5S6qEZ@dpg-d76enj8ule4c73eskkag-a.frankfurt-postgres.render.com/ecog_db":
+    engine = create_engine(db_url)
+else:
+    engine = None
+    print("UWAGA: Nie podano linku do bazy danych!")
+
+
+# --- FUNKCJE STATUSU POBIERANIA ---
 def update_status_file(text):
     with open("status.txt", "w", encoding="utf-8") as f:
         f.write(text)
@@ -21,9 +42,13 @@ def read_status_file():
     with open("status.txt", "r", encoding="utf-8") as f:
         return f.read()
 
+# --- POBIERACZ DANYCH Z GIOŚ (ZAPIS DO BAZY SQL) ---
 def tlo_pobieranie():
+    if engine is None:
+        update_status_file("Błąd: Brak połączenia z bazą SQL.")
+        return
+        
     update_status_file("Inicjalizacja pobierania...")
-    file_path = 'baza_powietrza_polska3.csv'
     dzisiejsza_data = datetime.date.today().strftime('%Y-%m-%d')
     
     API_BASE = "https://api.gios.gov.pl/pjp-api/v1/rest"
@@ -140,10 +165,9 @@ def tlo_pobieranie():
 
         if len(data) > 0:
             df = pd.DataFrame(data)
-            if os.path.exists(file_path):
-                df.to_csv(file_path, mode='a', header=False, index=False, encoding='utf-8-sig')
-            else:
-                df.to_csv(file_path, index=False, encoding='utf-8-sig')
+            # --- ZAPIS DO BAZY DANYCH ZAMIAST DO CSV ---
+            # if_exists='append' dopisuje wiersze. Tabela stworzy się sama!
+            df.to_sql('pomiary_powietrza', engine, if_exists='append', index=False)
             update_status_file("ZAKOŃCZONO")
         else:
             update_status_file("Błąd: Brak odczytów z maszyn.")
@@ -151,15 +175,16 @@ def tlo_pobieranie():
     except Exception as e:
         update_status_file(f"Błąd sieciowy.")
 
-def wczytaj_dane_z_csv():
-    file_path = 'baza_powietrza_polska3.csv'
-    if not os.path.exists(file_path):
+# --- ODCZYT Z BAZY DANYCH DO PAMIĘCI ---
+def wczytaj_dane_z_bazy():
+    if engine is None:
         return pd.DataFrame(), []
+        
     try:
-        df_raw = pd.read_csv(file_path)
-        if 'date' not in df_raw.columns:
-            df_raw.columns = ['id', 'city', 'name', 'lat', 'lon', 'date', 'pm10', 'pm25', 'no2', 'so2', 'co']
-            
+        # Odczyt pełnej tabeli z bazy
+        df_raw = pd.read_sql_table('pomiary_powietrza', engine)
+        
+        # Reszta logiki zostaje bez zmian (czyszczenie duplikatów z dzisiaj itp.)
         df_raw = df_raw.drop_duplicates(subset=['id', 'date'], keep='last')
         df_raw = df_raw.sort_values('date') 
         dates = df_raw['date'].unique().tolist()[-7:] 
@@ -186,13 +211,14 @@ def wczytaj_dane_z_csv():
             data.append(station_data)
         return pd.DataFrame(data), dates
     except Exception as e:
-        print(f"Błąd odczytu CSV: {e}")
+        print(f"INFO: Tabela w bazie jest jeszcze pusta lub wystąpił błąd: {e}")
         return pd.DataFrame(), []
 
-GLOBAL_DF_INIT, _ = wczytaj_dane_z_csv()
+GLOBAL_DF_INIT, _ = wczytaj_dane_z_bazy()
 POLAND_BORDER = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/poland.geojson"
 DEFAULT_STATION = GLOBAL_DF_INIT.iloc[0]['id'] if not GLOBAL_DF_INIT.empty else 0
 
+# INICJALIZACJA APLIKACJI 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME])
 server = app.server
 
@@ -205,12 +231,13 @@ color_mode_switch = html.Span(
     style={"fontSize": "20px", "marginTop": "5px"}
 )
 
+#  LAYOUT 
 app.layout = dbc.Container([
     dcc.Store(id='trigger-update', data=0), 
     
     html.Div([
         html.Div([
-            html.Img(src="assets/logo_ecog.png", style={'height': '70px', 'marginRight': '15px'}),
+            html.Img(src="/assets/logo_ecog.png", style={'height': '70px', 'marginRight': '15px'}),
             html.H2("EcoG", style={'fontWeight': 'bold', 'margin': '0'})
         ], style={'display': 'flex', 'alignItems': 'center'}),
         
@@ -278,6 +305,7 @@ app.layout = dbc.Container([
     ], className="row")
 ], fluid=True, style={'padding': '20px'})
 
+# LOGIKA APLIKACJI 
 
 clientside_callback(
     """
@@ -290,6 +318,7 @@ clientside_callback(
     Input("switch", "value"),
 )
 
+# 1. AKCJA: KLIKNIĘCIE PRZYCISKU POBIERZ
 @app.callback(
     Output('status-interval', 'disabled'),
     Input('download-btn', 'n_clicks'),
@@ -298,20 +327,20 @@ clientside_callback(
 def start_download(n_clicks):
     if not n_clicks: return True
     
-    file_path = 'baza_powietrza_polska3.csv'
+    # Sprawdzenie czy w bazie są już dzisiejsze dane (aby nie pobierać drugi raz)
     dzisiejsza_data = datetime.date.today().strftime('%Y-%m-%d')
-    if os.path.exists(file_path):
-        try:
-            df_check = pd.read_csv(file_path)
-            if 'date' in df_check.columns and dzisiejsza_data in df_check['date'].values:
-                update_status_file("Aktualne dane są już pobrane.")
-                return False 
-        except:
-            pass
+    try:
+        df_check = pd.read_sql(f"SELECT date FROM pomiary_powietrza WHERE date = '{dzisiejsza_data}' LIMIT 1", engine)
+        if not df_check.empty:
+            update_status_file("Aktualne dane są już pobrane.")
+            return False 
+    except Exception:
+        pass # Jeśli to pierwsze uruchomienie i tabela nie istnieje, pominie ten krok
             
     threading.Thread(target=tlo_pobieranie).start()
     return False 
 
+# 2. AKCJA: CZYTANIE STATUSU Z PLIKU (POLLING)
 @app.callback(
     [Output('download-status', 'children'),
      Output('status-interval', 'disabled', allow_duplicate=True),
@@ -334,6 +363,7 @@ def update_status_text(n, current_trigger):
     else:
         return "", False, current_trigger
 
+# 3. AKCJA: AKTUALIZACJA LISTY ROZWIJANEJ
 @app.callback(
     [Output("station-dropdown", "options"),
      Output("station-dropdown", "value")],
@@ -341,12 +371,13 @@ def update_status_text(n, current_trigger):
     State("station-dropdown", "value")
 )
 def update_dropdown(trigger, current_val):
-    temp_df, _ = wczytaj_dane_z_csv()
+    temp_df, _ = wczytaj_dane_z_bazy()
     if temp_df.empty: return [], dash.no_update
     options = [{'label': row['name'], 'value': row['id']} for _, row in temp_df.iterrows()]
     val = current_val if current_val in temp_df['id'].values else temp_df.iloc[0]['id']
     return options, val
 
+# 4. AKCJA: AKTUALIZACJA MAPY I RANKINGU
 @app.callback(
     [Output('map-res', 'children'),
      Output('ranking-table', 'data'),
@@ -356,7 +387,7 @@ def update_dropdown(trigger, current_val):
      Input('trigger-update', 'data')] 
 )
 def update_map_elements(pollutant, tab, trigger):
-    temp_df, _ = wczytaj_dane_z_csv()
+    temp_df, _ = wczytaj_dane_z_bazy()
     
     if temp_df.empty:
         return [dl.TileLayer()], [], html.Div()
@@ -400,55 +431,48 @@ def update_map_elements(pollutant, tab, trigger):
     if tab != 'tab-stations':
         children.append(dl.GeoJSON(url=POLAND_BORDER, style={'color': '#888', 'fillOpacity': 0, 'weight': 2}))
 
-    heat_blobs = [] 
+    heat_data = [] 
     interactive_points = []
 
     for _, row in temp_df.iterrows():
-        val = float(row['today_val'])
+        val = row['today_val']
         color = get_color(val)
         unit = "mg/m³" if pollutant == 'co' else "µg/m³"
         display_text = f"{pollutant.upper()}: {val} {unit}"
         unique_id = f"marker-{row['id']}-{pollutant}-{tab}"
         
-        lat = float(row['lat'])
-        lon = float(row['lon'])
-        
         if tab == 'tab-stations':
             interactive_points.append(
                 dl.CircleMarker(
                     id=unique_id, 
-                    center=[lat, lon], radius=6,
+                    center=[row['lat'], row['lon']], radius=6,
                     color=color, fill=True, fillOpacity=0.9, weight=1,
                     children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
                 )
             )
         else:
-            heat_blobs.append(
-                dl.Circle(
-                    id=f"blob-{unique_id}", 
-                    center=[lat, lon], 
-                    radius=65000, 
-                    fillColor=color, color="transparent", 
-                    fill=True, 
-                    fillOpacity=0.2, 
-                    interactive=False
-                )
-            )
+            if val > 0:
+                intensity = min(val / t[1], 1.0) 
+                heat_data.append([row['lat'], row['lon'], intensity])
+
             interactive_points.append(
                 dl.CircleMarker(
                     id=f"point-{unique_id}", 
-                    center=[lat, lon], radius=3, 
-                    color="#333", fillColor=color, fillOpacity=1, weight=1,
-                    children=[
-                        dl.Tooltip(row['name'], permanent=True, direction="top", offset=[0, -10]),
-                        dl.Popup([html.B(row['name']), html.Br(), display_text]) 
-                    ]
+                    center=[row['lat'], row['lon']], radius=3, 
+                    color="#333", fillColor=color, fillOpacity=1, weight=1
                 )
             )
 
     if tab == 'tab-heatmap':
-        children.append(dl.LayerGroup(heat_blobs))
-        
+        children.append(
+            dl.Heatmap(
+                data=heat_data,
+                max=1.0,
+                radius=25, 
+                blur=15
+            )
+        )
+
     children.append(dl.LayerGroup(interactive_points))
     
     legend_html = html.Div([
@@ -460,6 +484,7 @@ def update_map_elements(pollutant, tab, trigger):
     ])
     return children, safe_table_data.to_dict('records'), legend_html
 
+# 5. AKCJA: AKTUALIZACJA WYKRESU
 @app.callback(
     Output('history-chart', 'figure'),
     [Input('pollutant-dropdown', 'value'),
@@ -468,7 +493,7 @@ def update_map_elements(pollutant, tab, trigger):
      Input('trigger-update', 'data')] 
 )
 def update_chart(pollutant, station_id, is_light_mode, trigger):
-    temp_df, dates = wczytaj_dane_z_csv()
+    temp_df, dates = wczytaj_dane_z_bazy()
     
     if temp_df.empty:
         return px.line(title="Brak danych do wyświetlenia")
