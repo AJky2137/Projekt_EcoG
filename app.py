@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import dash
-from dash import dcc, html, dash_table, Input, Output, clientside_callback, ctx, Patch, State, ALL
+from dash import dcc, html, dash_table, Input, Output, clientside_callback, ctx, Patch, State
 import dash_leaflet as dl
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -345,19 +345,17 @@ def update_status_text(n, current_trigger):
         return "", False, current_trigger
 
 @app.callback(
-    Output('station-dropdown', 'value'),
-    Input({'type': 'station-marker', 'index': ALL}, 'n_clicks'),
-    prevent_initial_call=True
+    [Output("station-dropdown", "options"),
+     Output("station-dropdown", "value")],
+    Input('trigger-update', 'data'),
+    State("station-dropdown", "value")
 )
-def map_click(n_clicks_list):
-    if not ctx.triggered:
-        raise dash.exceptions.PreventUpdate
-    trigger = ctx.triggered[0]
-    if trigger['value']: 
-        triggered_id = ctx.triggered_id
-        if isinstance(triggered_id, dict):
-            return triggered_id['index']
-    raise dash.exceptions.PreventUpdate
+def update_dropdown(trigger, current_val):
+    temp_df, _ = wczytaj_dane_z_bazy()
+    if temp_df.empty: return [], dash.no_update
+    options = [{'label': row['name'], 'value': row['id']} for _, row in temp_df.iterrows()]
+    val = current_val if current_val in temp_df['id'].values else temp_df.iloc[0]['id']
+    return options, val
 
 @app.callback(
     [Output('map-res', 'children'),
@@ -365,14 +363,13 @@ def map_click(n_clicks_list):
      Output('dynamic-legend', 'children')], 
     [Input('pollutant-dropdown', 'value'),
      Input('map-tabs', 'value'),
-     Input('download-status', 'children'),
-     Input('station-dropdown', 'value')] 
+     Input('trigger-update', 'data')] 
 )
-def update_map_elements(pollutant, tab, download_status, selected_station):
-    temp_df, _ = wczytaj_dane_z_csv()
+def update_map_elements(pollutant, tab, trigger):
+    temp_df, _ = wczytaj_dane_z_bazy()
     
     if temp_df.empty:
-        return [dl.TileLayer()], [], html.Div()
+        return [dl.TileLayer(url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png")], [], html.Div()
 
     thresholds = {
         'pm10': [50, 110],
@@ -410,84 +407,71 @@ def update_map_elements(pollutant, tab, download_status, selected_station):
     safe_table_data = table_data[['name', 'display_val', 'display_trend', 'rank_change_str']]
 
     children = []
+    
     if tab == 'tab-stations':
-        children.append(dl.TileLayer())
+        children.append(dl.TileLayer(url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"))
     else:
         children.append(dl.GeoJSON(url=POLAND_BORDER, style={'color': '#888', 'fillOpacity': 0, 'weight': 2}))
 
-    heat_data = [] 
+    heat_blobs = [] 
     interactive_points = []
-    
-    selected_marker_osm = None
-    selected_marker_heat = None
-    
-    try:
-        selected_station_id = int(selected_station)
-    except:
-        selected_station_id = -1
 
     for _, row in temp_df.iterrows():
-        val = row['today_val']
+        val = float(row['today_val'])
         color = get_color(val)
         unit = "mg/m³" if pollutant == 'co' else "µg/m³"
         display_text = f"{pollutant.upper()}: {val} {unit}"
+        unique_id = f"marker-{row['id']}-{pollutant}-{tab}"
         
-        unique_id_dict = {'type': 'station-marker', 'index': int(row['id'])}
-        is_selected = (int(row['id']) == selected_station_id)
+        lat = float(row['lat'])
+        lon = float(row['lon'])
         
-        marker_color = "#007BFF" if is_selected else color
+        # --- ZMIANA: Dynamiczne promienie punktów zależne od dostępności danych ---
+        czy_brak_danych = (val == 0.0)
+        promien_osm = 2 if czy_brak_danych else 6     
+        promien_heat = 1.5 if czy_brak_danych else 3  
         
         if tab == 'tab-stations':
-            m = dl.CircleMarker(
-                id=unique_id_dict, 
-                center=[row['lat'], row['lon']], radius=6,
-                color=marker_color, fill=True, fillOpacity=1 if is_selected else 0.9, weight=3 if is_selected else 1,
-                fillColor=marker_color,
-                children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
+            interactive_points.append(
+                dl.CircleMarker(
+                    id=unique_id, 
+                    center=[lat, lon], radius=promien_osm,
+                    color=color, fill=True, fillOpacity=0.9, weight=1,
+                    children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
+                )
             )
-            if is_selected:
-                selected_marker_osm = m
-            else:
-                interactive_points.append(m)
         else:
-            if val > 0:
-                intensity = min(val / t[1], 1.0) 
-                heat_data.append([row['lat'], row['lon'], intensity])
-
-            m = dl.CircleMarker(
-                id=unique_id_dict, 
-                center=[row['lat'], row['lon']], radius=3, 
-                color="#007BFF" if is_selected else "#333", 
-                fillColor=marker_color, fillOpacity=1, weight=2 if is_selected else 1,
-                children=[
-                    dl.Tooltip(row['name'], permanent=False, direction="top", offset=[0, -10]),
-                    dl.Popup([html.B(row['name']), html.Br(), display_text]) 
-                ]
+            # Nie dodajemy szarej plamy 15km dla punktów bez danych
+            if not czy_brak_danych:
+                heat_blobs.append(
+                    dl.Circle(
+                        id=f"blob-{unique_id}", 
+                        center=[lat, lon], 
+                        radius=15000, 
+                        fillColor=color, color="transparent", 
+                        fill=True, 
+                        fillOpacity=0.2, 
+                        interactive=False
+                    )
+                )
+            interactive_points.append(
+                dl.CircleMarker(
+                    id=f"point-{unique_id}", 
+                    center=[lat, lon], radius=promien_heat, 
+                    color="#333", fillColor=color, fillOpacity=1, weight=1,
+                    children=[
+                        dl.Popup([html.B(row['name']), html.Br(), display_text])
+                    ]
+                )
             )
-            if is_selected:
-                selected_marker_heat = m
-            else:
-                interactive_points.append(m)
 
     if tab == 'tab-heatmap':
-        children.append(
-            dl.Heatmap(
-                data=heat_data,
-                max=1.0,
-                radius=25, 
-                blur=15
-            )
-        )
-
-    if selected_marker_osm:
-        interactive_points.append(selected_marker_osm)
-    if selected_marker_heat:
-        interactive_points.append(selected_marker_heat)
-
+        children.append(dl.LayerGroup(heat_blobs))
+        
     children.append(dl.LayerGroup(interactive_points))
     
     legend_html = html.Div([
-        html.P("Legenda:", style={'fontWeight': 'bold'}),
+        html.P("Legenda (zgodnie z normami):", style={'fontWeight': 'bold'}),
         html.Div([html.Span("●", style={'color': '#2ECC71'}), f" Dobra (<= {t[0]})"]),
         html.Div([html.Span("●", style={'color': '#F39C12'}), f" Umiarkowana ({t[0]} - {t[1]})"]),
         html.Div([html.Span("●", style={'color': '#E74C3C'}), f" Zła (> {t[1]})"]),
@@ -500,19 +484,19 @@ def update_map_elements(pollutant, tab, download_status, selected_station):
     [Input('pollutant-dropdown', 'value'),
      Input('station-dropdown', 'value'),
      Input('switch', 'value'),
-     Input('download-status', 'children')] 
+     Input('trigger-update', 'data')] 
 )
-def update_chart(pollutant, station_id, is_light_mode, download_status):
-    temp_df, dates = wczytaj_dane_z_csv()
+def update_chart(pollutant, station_id, is_light_mode, trigger):
+    temp_df, dates = wczytaj_dane_z_bazy()
     
     if temp_df.empty:
         return px.line(title="Brak danych do wyświetlenia")
 
-    trigger = ctx.triggered_id
+    trigger_id = ctx.triggered_id
     text_color = '#000' if is_light_mode else '#fff'
     grid_color = '#eee' if is_light_mode else '#555'
     line_color = '#c0392b' if is_light_mode else '#e74c3c'
-    if trigger == 'switch':
+    if trigger_id == 'switch':
         patched_figure = Patch()
         patched_figure["layout"]["font"]["color"] = text_color
         patched_figure["layout"]["xaxis"]["gridcolor"] = grid_color
