@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import dash
-from dash import dcc, html, dash_table, Input, Output, clientside_callback, ctx, Patch, State
+from dash import dcc, html, dash_table, Input, Output, clientside_callback, ctx, Patch, State, ALL
 import dash_leaflet as dl
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -357,15 +357,32 @@ def update_dropdown(trigger, current_val):
     val = current_val if current_val in temp_df['id'].values else temp_df.iloc[0]['id']
     return options, val
 
+# --- NOWOŚĆ: Wykrywanie kliknięcia na mapie i aktualizacja listy stacji ---
+@app.callback(
+    Output('station-dropdown', 'value', allow_duplicate=True),
+    Input({'type': 'station-marker', 'index': ALL}, 'n_clicks'),
+    prevent_initial_call=True
+)
+def map_click(n_clicks_list):
+    if not ctx.triggered:
+        raise dash.exceptions.PreventUpdate
+    trigger = ctx.triggered[0]
+    if trigger['value']: 
+        triggered_id = ctx.triggered_id
+        if isinstance(triggered_id, dict):
+            return triggered_id['index']
+    raise dash.exceptions.PreventUpdate
+
 @app.callback(
     [Output('map-res', 'children'),
      Output('ranking-table', 'data'),
      Output('dynamic-legend', 'children')], 
     [Input('pollutant-dropdown', 'value'),
      Input('map-tabs', 'value'),
-     Input('trigger-update', 'data')] 
+     Input('trigger-update', 'data'),
+     Input('station-dropdown', 'value')] # Nasłuchujemy aktywnej stacji
 )
-def update_map_elements(pollutant, tab, trigger):
+def update_map_elements(pollutant, tab, trigger, selected_station):
     temp_df, _ = wczytaj_dane_z_bazy()
     
     if temp_df.empty:
@@ -415,37 +432,53 @@ def update_map_elements(pollutant, tab, trigger):
 
     heat_blobs = [] 
     interactive_points = []
+    
+    # Zmienne by wyróżniona stacja trafiła na mapę jako OSTATNIA (na sam wierzch)
+    selected_marker_osm = None
+    selected_marker_heat = None
 
     for _, row in temp_df.iterrows():
         val = float(row['today_val'])
         color = get_color(val)
         unit = "mg/m³" if pollutant == 'co' else "µg/m³"
         display_text = f"{pollutant.upper()}: {val} {unit}"
-        unique_id = f"marker-{row['id']}-{pollutant}-{tab}"
+        
+        # Specjalne ID słownikowe potrzebne by Dash rozróżniał kliknięte punkty
+        unique_id_dict = {'type': 'station-marker', 'index': row['id']}
+        is_selected = (row['id'] == selected_station)
         
         lat = float(row['lat'])
         lon = float(row['lon'])
         
-        # --- ZMIANA: Dynamiczne promienie punktów zależne od dostępności danych ---
         czy_brak_danych = (val == 0.0)
         promien_osm = 2 if czy_brak_danych else 6     
         promien_heat = 1.5 if czy_brak_danych else 3  
         
         if tab == 'tab-stations':
-            interactive_points.append(
-                dl.CircleMarker(
-                    id=unique_id, 
-                    center=[lat, lon], radius=promien_osm,
-                    color=color, fill=True, fillOpacity=0.9, weight=1,
-                    children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
-                )
+            m = dl.CircleMarker(
+                id=unique_id_dict, 
+                center=[lat, lon], 
+                radius=12 if is_selected else promien_osm,
+                color="#007BFF" if is_selected else color, 
+                fill=True, 
+                fillOpacity=1 if is_selected else 0.9, 
+                weight=3 if is_selected else 1,
+                fillColor="#007BFF" if is_selected else color,
+                children=[
+                    dl.Tooltip(row['name']), # Mały dymek nazwy przy najechaniu
+                    dl.Popup([html.B(row['name']), html.Br(), display_text])
+                ]
             )
+            if is_selected:
+                selected_marker_osm = m
+            else:
+                interactive_points.append(m)
+                
         else:
-            # Nie dodajemy szarej plamy 15km dla punktów bez danych
             if not czy_brak_danych:
                 heat_blobs.append(
                     dl.Circle(
-                        id=f"blob-{unique_id}", 
+                        id=f"blob-{row['id']}", 
                         center=[lat, lon], 
                         radius=15000, 
                         fillColor=color, color="transparent", 
@@ -454,24 +487,35 @@ def update_map_elements(pollutant, tab, trigger):
                         interactive=False
                     )
                 )
-            interactive_points.append(
-                dl.CircleMarker(
-                    id=f"point-{unique_id}", 
-                    center=[lat, lon], radius=promien_heat, 
-                    color="#333", fillColor=color, fillOpacity=1, weight=1,
-                    children=[
-                        dl.Popup([html.B(row['name']), html.Br(), display_text])
-                    ]
-                )
+            m = dl.CircleMarker(
+                id=unique_id_dict, 
+                center=[lat, lon], 
+                radius=8 if is_selected else promien_heat, 
+                color="#007BFF" if is_selected else "#333", 
+                fillColor="#007BFF" if is_selected else color, 
+                fillOpacity=1, 
+                weight=2 if is_selected else 1,
+                children=[
+                    dl.Tooltip(row['name']),
+                    dl.Popup([html.B(row['name']), html.Br(), display_text])
+                ]
             )
+            if is_selected:
+                selected_marker_heat = m
+            else:
+                interactive_points.append(m)
 
     if tab == 'tab-heatmap':
         children.append(dl.LayerGroup(heat_blobs))
         
+    # Doklejamy wyróżnione markery na samym końcu żeby były ponad innymi
+    if selected_marker_osm: interactive_points.append(selected_marker_osm)
+    if selected_marker_heat: interactive_points.append(selected_marker_heat)
+        
     children.append(dl.LayerGroup(interactive_points))
     
     legend_html = html.Div([
-        html.P("Legenda (zgodnie z normami):", style={'fontWeight': 'bold'}),
+        html.P("Legenda:", style={'fontWeight': 'bold'}),
         html.Div([html.Span("●", style={'color': '#2ECC71'}), f" Dobra (<= {t[0]})"]),
         html.Div([html.Span("●", style={'color': '#F39C12'}), f" Umiarkowana ({t[0]} - {t[1]})"]),
         html.Div([html.Span("●", style={'color': '#E74C3C'}), f" Zła (> {t[1]})"]),
