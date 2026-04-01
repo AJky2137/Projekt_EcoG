@@ -404,30 +404,33 @@ def update_map_elements(pollutant, tab, trigger):
     interactive_points = []
 
     for _, row in temp_df.iterrows():
-        val = row['today_val']
+        val = float(row['today_val'])
         color = get_color(val)
         unit = "mg/m³" if pollutant == 'co' else "µg/m³"
         display_text = f"{pollutant.upper()}: {val} {unit}"
         unique_id = f"marker-{row['id']}-{pollutant}-{tab}"
         
+        lat = float(row['lat'])
+        lon = float(row['lon'])
+        
         if tab == 'tab-stations':
             interactive_points.append(
                 dl.CircleMarker(
                     id=unique_id, 
-                    center=[row['lat'], row['lon']], radius=6,
+                    center=[lat, lon], radius=6,
                     color=color, fill=True, fillOpacity=0.9, weight=1,
                     children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
                 )
             )
         else:
             if val > 0:
-                intensity = min(val / t[1], 1.0) 
-                heat_data.append([row['lat'], row['lon'], intensity])
+                intensity = float(min(val / t[1], 1.0)) 
+                heat_data.append([lat, lon, intensity])
 
             interactive_points.append(
                 dl.CircleMarker(
                     id=f"point-{unique_id}", 
-                    center=[row['lat'], row['lon']], radius=3, 
+                    center=[lat, lon], radius=3, 
                     color="#333", fillColor=color, fillOpacity=1, weight=1,
                     children=[
                         dl.Tooltip(row['name'], permanent=False, direction="top", offset=[0, -10]),
@@ -441,15 +444,15 @@ def update_map_elements(pollutant, tab, trigger):
             dl.Heatmap(
                 data=heat_data,
                 max=1.0,
-                radius=45,
-                blur=30,
-                minOpacity=0.4,
+                radius=40,
+                blur=25,
+                minOpacity=0.3,
                 gradient={
-                    0.1: 'blue',
-                    0.4: 'cyan',
-                    0.6: 'lime',
-                    0.8: 'yellow',
-                    1.0: 'red'
+                    "0.1": "blue",
+                    "0.4": "cyan",
+                    "0.6": "lime",
+                    "0.8": "yellow",
+                    "1.0": "red"
                 }
             )
         )
