@@ -142,7 +142,7 @@ def pobierz_dzisiejsze_dane():
                 df.to_csv(file_path, mode='a', header=False, index=False, encoding='utf-8-sig')
             else:
                 df.to_csv(file_path, index=False, encoding='utf-8-sig')
-            print("--- ZAKOŃCZONO POBIERANIE SUKCESEM ---")
+            print("ZAKOŃCZONO POBIERANIE SUKCESEM")
             return "Ukończono!"
 
     except Exception as e:
@@ -364,11 +364,11 @@ def update_map_elements(pollutant, tab, download_status):
     safe_table_data = table_data[['name', 'display_val', 'display_trend', 'rank_change_str']]
 
     children = []
-
-    children.append(dl.TileLayer()) 
-    
-    if tab != 'tab-stations':
+    if tab == 'tab-stations':
+        children.append(dl.TileLayer())
+    else:
         children.append(dl.GeoJSON(url=POLAND_BORDER, style={'color': '#888', 'fillOpacity': 0, 'weight': 2}))
+
     heat_data = [] 
     interactive_points = []
 
@@ -410,16 +410,15 @@ def update_map_elements(pollutant, tab, download_status):
             dl.Heatmap(
                 data=heat_data,
                 max=1.0,
-                radius=15,    
-                blur=15,      
-                minOpacity=0.5 
+                radius=25, 
+                blur=15
             )
         )
 
     children.append(dl.LayerGroup(interactive_points))
     
     legend_html = html.Div([
-        html.P("Legenda (zgodnie z normami):", style={'fontWeight': 'bold'}),
+        html.P("Legenda:", style={'fontWeight': 'bold'}),
         html.Div([html.Span("●", style={'color': '#2ECC71'}), f" Dobra (<= {t[0]})"]),
         html.Div([html.Span("●", style={'color': '#F39C12'}), f" Umiarkowana ({t[0]} - {t[1]})"]),
         html.Div([html.Span("●", style={'color': '#E74C3C'}), f" Zła (> {t[1]})"]),
