@@ -13,25 +13,19 @@ import threading
 from sqlalchemy import create_engine
 
 # --- KONFIGURACJA BAZY DANYCH ---
-# Wklej poniżej swój External Database URL z Rendera do testów lokalnych (w Spyderze)
 LOKALNY_URL_BAZY = "postgresql://ecog_db_user:EicIZA5p5bMVtiv86K2ox82hCc5S6qEZ@dpg-d76enj8ule4c73eskkag-a.frankfurt-postgres.render.com/ecog_db"
 
-# Pobieramy ukryte hasło z serwera (jeśli działa na Render) lub używamy lokalnego (w Spyderze)
 db_url = os.environ.get('DATABASE_URL', LOKALNY_URL_BAZY)
 
-# Ważna łatka: SQLAlchemy wymaga prefiksu 'postgresql://' zamiast 'postgres://'
 if db_url and db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-# Tworzymy "silnik", czyli stałe połączenie z bazą
 if db_url and db_url != "postgresql://ecog_db_user:EicIZA5p5bMVtiv86K2ox82hCc5S6qEZ@dpg-d76enj8ule4c73eskkag-a.frankfurt-postgres.render.com/ecog_db":
     engine = create_engine(db_url)
 else:
     engine = None
     print("UWAGA: Nie podano linku do bazy danych!")
 
-
-# --- FUNKCJE STATUSU POBIERANIA ---
 def update_status_file(text):
     with open("status.txt", "w", encoding="utf-8") as f:
         f.write(text)
@@ -42,7 +36,6 @@ def read_status_file():
     with open("status.txt", "r", encoding="utf-8") as f:
         return f.read()
 
-# --- POBIERACZ DANYCH Z GIOŚ (ZAPIS DO BAZY SQL) ---
 def tlo_pobieranie():
     if engine is None:
         update_status_file("Błąd: Brak połączenia z bazą SQL.")
@@ -165,8 +158,6 @@ def tlo_pobieranie():
 
         if len(data) > 0:
             df = pd.DataFrame(data)
-            # --- ZAPIS DO BAZY DANYCH ZAMIAST DO CSV ---
-            # if_exists='append' dopisuje wiersze. Tabela stworzy się sama!
             df.to_sql('pomiary_powietrza', engine, if_exists='append', index=False)
             update_status_file("ZAKOŃCZONO")
         else:
@@ -175,16 +166,13 @@ def tlo_pobieranie():
     except Exception as e:
         update_status_file(f"Błąd sieciowy.")
 
-# --- ODCZYT Z BAZY DANYCH DO PAMIĘCI ---
 def wczytaj_dane_z_bazy():
     if engine is None:
         return pd.DataFrame(), []
         
     try:
-        # Odczyt pełnej tabeli z bazy
         df_raw = pd.read_sql_table('pomiary_powietrza', engine)
         
-        # Reszta logiki zostaje bez zmian (czyszczenie duplikatów z dzisiaj itp.)
         df_raw = df_raw.drop_duplicates(subset=['id', 'date'], keep='last')
         df_raw = df_raw.sort_values('date') 
         dates = df_raw['date'].unique().tolist()[-7:] 
@@ -218,7 +206,6 @@ GLOBAL_DF_INIT, _ = wczytaj_dane_z_bazy()
 POLAND_BORDER = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/poland.geojson"
 DEFAULT_STATION = GLOBAL_DF_INIT.iloc[0]['id'] if not GLOBAL_DF_INIT.empty else 0
 
-# INICJALIZACJA APLIKACJI 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME])
 server = app.server
 
@@ -231,7 +218,6 @@ color_mode_switch = html.Span(
     style={"fontSize": "20px", "marginTop": "5px"}
 )
 
-#  LAYOUT 
 app.layout = dbc.Container([
     dcc.Store(id='trigger-update', data=0), 
     
@@ -305,8 +291,6 @@ app.layout = dbc.Container([
     ], className="row")
 ], fluid=True, style={'padding': '20px'})
 
-# LOGIKA APLIKACJI 
-
 clientside_callback(
     """
     (switchOn) => {
@@ -318,7 +302,6 @@ clientside_callback(
     Input("switch", "value"),
 )
 
-# 1. AKCJA: KLIKNIĘCIE PRZYCISKU POBIERZ
 @app.callback(
     Output('status-interval', 'disabled'),
     Input('download-btn', 'n_clicks'),
@@ -327,7 +310,6 @@ clientside_callback(
 def start_download(n_clicks):
     if not n_clicks: return True
     
-    # Sprawdzenie czy w bazie są już dzisiejsze dane (aby nie pobierać drugi raz)
     dzisiejsza_data = datetime.date.today().strftime('%Y-%m-%d')
     try:
         df_check = pd.read_sql(f"SELECT date FROM pomiary_powietrza WHERE date = '{dzisiejsza_data}' LIMIT 1", engine)
@@ -335,12 +317,11 @@ def start_download(n_clicks):
             update_status_file("Aktualne dane są już pobrane.")
             return False 
     except Exception:
-        pass # Jeśli to pierwsze uruchomienie i tabela nie istnieje, pominie ten krok
+        pass 
             
     threading.Thread(target=tlo_pobieranie).start()
     return False 
 
-# 2. AKCJA: CZYTANIE STATUSU Z PLIKU (POLLING)
 @app.callback(
     [Output('download-status', 'children'),
      Output('status-interval', 'disabled', allow_duplicate=True),
@@ -363,7 +344,6 @@ def update_status_text(n, current_trigger):
     else:
         return "", False, current_trigger
 
-# 3. AKCJA: AKTUALIZACJA LISTY ROZWIJANEJ
 @app.callback(
     [Output("station-dropdown", "options"),
      Output("station-dropdown", "value")],
@@ -377,7 +357,6 @@ def update_dropdown(trigger, current_val):
     val = current_val if current_val in temp_df['id'].values else temp_df.iloc[0]['id']
     return options, val
 
-# 4. AKCJA: AKTUALIZACJA MAPY I RANKINGU
 @app.callback(
     [Output('map-res', 'children'),
      Output('ranking-table', 'data'),
@@ -390,7 +369,7 @@ def update_map_elements(pollutant, tab, trigger):
     temp_df, _ = wczytaj_dane_z_bazy()
     
     if temp_df.empty:
-        return [dl.TileLayer()], [], html.Div()
+        return [dl.TileLayer(url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png")], [], html.Div()
 
     thresholds = {
         'pm10': [50, 110],
@@ -427,8 +406,11 @@ def update_map_elements(pollutant, tab, trigger):
 
     safe_table_data = table_data[['name', 'display_val', 'display_trend', 'rank_change_str']]
 
-    children = [dl.TileLayer()]
-    if tab != 'tab-stations':
+    children = []
+    
+    if tab == 'tab-stations':
+        children.append(dl.TileLayer(url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"))
+    else:
         children.append(dl.GeoJSON(url=POLAND_BORDER, style={'color': '#888', 'fillOpacity': 0, 'weight': 2}))
 
     heat_blobs = [] 
@@ -490,7 +472,6 @@ def update_map_elements(pollutant, tab, trigger):
     ])
     return children, safe_table_data.to_dict('records'), legend_html
 
-# 5. AKCJA: AKTUALIZACJA WYKRESU
 @app.callback(
     Output('history-chart', 'figure'),
     [Input('pollutant-dropdown', 'value'),
