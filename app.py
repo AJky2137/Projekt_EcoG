@@ -345,20 +345,7 @@ def update_status_text(n, current_trigger):
         return "", False, current_trigger
 
 @app.callback(
-    [Output("station-dropdown", "options"),
-     Output("station-dropdown", "value")],
-    Input('trigger-update', 'data'),
-    State("station-dropdown", "value")
-)
-def update_dropdown(trigger, current_val):
-    temp_df, _ = wczytaj_dane_z_bazy()
-    if temp_df.empty: return [], dash.no_update
-    options = [{'label': row['name'], 'value': row['id']} for _, row in temp_df.iterrows()]
-    val = current_val if current_val in temp_df['id'].values else temp_df.iloc[0]['id']
-    return options, val
-
-@app.callback(
-    Output('station-dropdown', 'value', allow_duplicate=True),
+    Output('station-dropdown', 'value'),
     Input({'type': 'station-marker', 'index': ALL}, 'n_clicks'),
     prevent_initial_call=True
 )
@@ -378,11 +365,11 @@ def map_click(n_clicks_list):
      Output('dynamic-legend', 'children')], 
     [Input('pollutant-dropdown', 'value'),
      Input('map-tabs', 'value'),
-     Input('trigger-update', 'data'),
+     Input('download-status', 'children'),
      Input('station-dropdown', 'value')] 
 )
-def update_map_elements(pollutant, tab, trigger, selected_station):
-    temp_df, _ = wczytaj_dane_z_bazy()
+def update_map_elements(pollutant, tab, download_status, selected_station):
+    temp_df, _ = wczytaj_dane_z_csv()
     
     if temp_df.empty:
         return [dl.TileLayer()], [], html.Div()
@@ -448,14 +435,14 @@ def update_map_elements(pollutant, tab, trigger, selected_station):
         unique_id_dict = {'type': 'station-marker', 'index': int(row['id'])}
         is_selected = (int(row['id']) == selected_station_id)
         
+        marker_color = "#007BFF" if is_selected else color
+        
         if tab == 'tab-stations':
             m = dl.CircleMarker(
                 id=unique_id_dict, 
                 center=[row['lat'], row['lon']], radius=6,
-                color="#007BFF" if is_selected else color, 
-                fill=True, fillOpacity=1 if is_selected else 0.9, 
-                weight=3 if is_selected else 1,
-                fillColor="#007BFF" if is_selected else color,
+                color=marker_color, fill=True, fillOpacity=1 if is_selected else 0.9, weight=3 if is_selected else 1,
+                fillColor=marker_color,
                 children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
             )
             if is_selected:
@@ -471,8 +458,7 @@ def update_map_elements(pollutant, tab, trigger, selected_station):
                 id=unique_id_dict, 
                 center=[row['lat'], row['lon']], radius=3, 
                 color="#007BFF" if is_selected else "#333", 
-                fillColor="#007BFF" if is_selected else color, 
-                fillOpacity=1, weight=2 if is_selected else 1,
+                fillColor=marker_color, fillOpacity=1, weight=2 if is_selected else 1,
                 children=[
                     dl.Tooltip(row['name'], permanent=False, direction="top", offset=[0, -10]),
                     dl.Popup([html.B(row['name']), html.Br(), display_text]) 
@@ -514,19 +500,19 @@ def update_map_elements(pollutant, tab, trigger, selected_station):
     [Input('pollutant-dropdown', 'value'),
      Input('station-dropdown', 'value'),
      Input('switch', 'value'),
-     Input('trigger-update', 'data')] 
+     Input('download-status', 'children')] 
 )
-def update_chart(pollutant, station_id, is_light_mode, trigger):
-    temp_df, dates = wczytaj_dane_z_bazy()
+def update_chart(pollutant, station_id, is_light_mode, download_status):
+    temp_df, dates = wczytaj_dane_z_csv()
     
     if temp_df.empty:
         return px.line(title="Brak danych do wyświetlenia")
 
-    trigger_id = ctx.triggered_id
+    trigger = ctx.triggered_id
     text_color = '#000' if is_light_mode else '#fff'
     grid_color = '#eee' if is_light_mode else '#555'
     line_color = '#c0392b' if is_light_mode else '#e74c3c'
-    if trigger_id == 'switch':
+    if trigger == 'switch':
         patched_figure = Patch()
         patched_figure["layout"]["font"]["color"] = text_color
         patched_figure["layout"]["xaxis"]["gridcolor"] = grid_color
