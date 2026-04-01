@@ -11,7 +11,6 @@ import datetime
 import time
 import threading
 
-# POBIERACZ DANYCH Z GIOŚ
 def update_status_file(text):
     with open("status.txt", "w", encoding="utf-8") as f:
         f.write(text)
@@ -82,7 +81,6 @@ def tlo_pobieranie():
                  city_name = station_name.split(',')[0].split('-')[0].strip()
 
             if st_id and lat and lon and station_name:
-                # WYSYŁAMY STATUS DO PLIKU (Odświeża się w UI)
                 update_status_file(f"Pobieranie stacji {index+1}/{total_stations}...")
                 
                 station_data = {
@@ -153,7 +151,6 @@ def tlo_pobieranie():
     except Exception as e:
         update_status_file(f"Błąd sieciowy.")
 
-# ODCZYT BAZY DO PAMIĘCI
 def wczytaj_dane_z_csv():
     file_path = 'baza_powietrza_polska3.csv'
     if not os.path.exists(file_path):
@@ -196,7 +193,6 @@ GLOBAL_DF_INIT, _ = wczytaj_dane_z_csv()
 POLAND_BORDER = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/poland.geojson"
 DEFAULT_STATION = GLOBAL_DF_INIT.iloc[0]['id'] if not GLOBAL_DF_INIT.empty else 0
 
-# INICJALIZACJA APLIKACJI 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME])
 server = app.server
 
@@ -209,13 +205,12 @@ color_mode_switch = html.Span(
     style={"fontSize": "20px", "marginTop": "5px"}
 )
 
-#  LAYOUT 
 app.layout = dbc.Container([
-    dcc.Store(id='trigger-update', data=0), # Magazyn wyzwalający odświeżenie map
+    dcc.Store(id='trigger-update', data=0), 
     
     html.Div([
         html.Div([
-            html.Img(src="/assets/logo_ecog.png", style={'height': '70px', 'marginRight': '15px'}),
+            html.Img(src="assets/logo_ecog.png", style={'height': '70px', 'marginRight': '15px'}),
             html.H2("EcoG", style={'fontWeight': 'bold', 'margin': '0'})
         ], style={'display': 'flex', 'alignItems': 'center'}),
         
@@ -283,7 +278,6 @@ app.layout = dbc.Container([
     ], className="row")
 ], fluid=True, style={'padding': '20px'})
 
-# LOGIKA APLIKACJI 
 
 clientside_callback(
     """
@@ -296,7 +290,6 @@ clientside_callback(
     Input("switch", "value"),
 )
 
-# 1. AKCJA: KLIKNIĘCIE PRZYCISKU POBIERZ
 @app.callback(
     Output('status-interval', 'disabled'),
     Input('download-btn', 'n_clicks'),
@@ -312,14 +305,13 @@ def start_download(n_clicks):
             df_check = pd.read_csv(file_path)
             if 'date' in df_check.columns and dzisiejsza_data in df_check['date'].values:
                 update_status_file("Aktualne dane są już pobrane.")
-                return False # Otwiera interwał na 1 cykl żeby odczytać komunikat
+                return False 
         except:
             pass
             
     threading.Thread(target=tlo_pobieranie).start()
-    return False # Uruchamia odpytywanie pliku
+    return False 
 
-# 2. AKCJA: CZYTANIE STATUSU Z PLIKU (POLLING)
 @app.callback(
     [Output('download-status', 'children'),
      Output('status-interval', 'disabled', allow_duplicate=True),
@@ -342,7 +334,6 @@ def update_status_text(n, current_trigger):
     else:
         return "", False, current_trigger
 
-# 3. AKCJA: AKTUALIZACJA LISTY ROZWIJANEJ
 @app.callback(
     [Output("station-dropdown", "options"),
      Output("station-dropdown", "value")],
@@ -356,7 +347,6 @@ def update_dropdown(trigger, current_val):
     val = current_val if current_val in temp_df['id'].values else temp_df.iloc[0]['id']
     return options, val
 
-# 4. AKCJA: AKTUALIZACJA MAPY I RANKINGU
 @app.callback(
     [Output('map-res', 'children'),
      Output('ranking-table', 'data'),
@@ -438,7 +428,11 @@ def update_map_elements(pollutant, tab, trigger):
                 dl.CircleMarker(
                     id=f"point-{unique_id}", 
                     center=[row['lat'], row['lon']], radius=3, 
-                    color="#333", fillColor=color, fillOpacity=1, weight=1
+                    color="#333", fillColor=color, fillOpacity=1, weight=1,
+                    children=[
+                        dl.Tooltip(row['name'], permanent=False, direction="top", offset=[0, -10]),
+                        dl.Popup([html.B(row['name']), html.Br(), display_text]) 
+                    ]
                 )
             )
 
@@ -447,8 +441,16 @@ def update_map_elements(pollutant, tab, trigger):
             dl.Heatmap(
                 data=heat_data,
                 max=1.0,
-                radius=25, 
-                blur=15
+                radius=45,
+                blur=30,
+                minOpacity=0.4,
+                gradient={
+                    0.1: 'blue',
+                    0.4: 'cyan',
+                    0.6: 'lime',
+                    0.8: 'yellow',
+                    1.0: 'red'
+                }
             )
         )
 
@@ -463,7 +465,6 @@ def update_map_elements(pollutant, tab, trigger):
     ])
     return children, safe_table_data.to_dict('records'), legend_html
 
-# 5. AKCJA: AKTUALIZACJA WYKRESU
 @app.callback(
     Output('history-chart', 'figure'),
     [Input('pollutant-dropdown', 'value'),
