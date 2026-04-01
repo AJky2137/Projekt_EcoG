@@ -357,7 +357,6 @@ def update_dropdown(trigger, current_val):
     val = current_val if current_val in temp_df['id'].values else temp_df.iloc[0]['id']
     return options, val
 
-# --- NOWOŚĆ: Wykrywanie kliknięcia na mapie i aktualizacja listy stacji ---
 @app.callback(
     Output('station-dropdown', 'value', allow_duplicate=True),
     Input({'type': 'station-marker', 'index': ALL}, 'n_clicks'),
@@ -380,13 +379,13 @@ def map_click(n_clicks_list):
     [Input('pollutant-dropdown', 'value'),
      Input('map-tabs', 'value'),
      Input('trigger-update', 'data'),
-     Input('station-dropdown', 'value')] # Nasłuchujemy aktywnej stacji
+     Input('station-dropdown', 'value')] 
 )
 def update_map_elements(pollutant, tab, trigger, selected_station):
     temp_df, _ = wczytaj_dane_z_bazy()
     
     if temp_df.empty:
-        return [dl.TileLayer(url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png")], [], html.Div()
+        return [dl.TileLayer()], [], html.Div()
 
     thresholds = {
         'pm10': [50, 110],
@@ -424,80 +423,59 @@ def update_map_elements(pollutant, tab, trigger, selected_station):
     safe_table_data = table_data[['name', 'display_val', 'display_trend', 'rank_change_str']]
 
     children = []
-    
     if tab == 'tab-stations':
-        children.append(dl.TileLayer(url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"))
+        children.append(dl.TileLayer())
     else:
         children.append(dl.GeoJSON(url=POLAND_BORDER, style={'color': '#888', 'fillOpacity': 0, 'weight': 2}))
 
-    heat_blobs = [] 
+    heat_data = [] 
     interactive_points = []
     
-    # Zmienne by wyróżniona stacja trafiła na mapę jako OSTATNIA (na sam wierzch)
     selected_marker_osm = None
     selected_marker_heat = None
+    
+    try:
+        selected_station_id = int(selected_station)
+    except:
+        selected_station_id = -1
 
     for _, row in temp_df.iterrows():
-        val = float(row['today_val'])
+        val = row['today_val']
         color = get_color(val)
         unit = "mg/m³" if pollutant == 'co' else "µg/m³"
         display_text = f"{pollutant.upper()}: {val} {unit}"
         
-        # Specjalne ID słownikowe potrzebne by Dash rozróżniał kliknięte punkty
-        unique_id_dict = {'type': 'station-marker', 'index': row['id']}
-        is_selected = (row['id'] == selected_station)
-        
-        lat = float(row['lat'])
-        lon = float(row['lon'])
-        
-        czy_brak_danych = (val == 0.0)
-        promien_osm = 2 if czy_brak_danych else 6     
-        promien_heat = 1.5 if czy_brak_danych else 3  
+        unique_id_dict = {'type': 'station-marker', 'index': int(row['id'])}
+        is_selected = (int(row['id']) == selected_station_id)
         
         if tab == 'tab-stations':
             m = dl.CircleMarker(
                 id=unique_id_dict, 
-                center=[lat, lon], 
-                radius=12 if is_selected else promien_osm,
+                center=[row['lat'], row['lon']], radius=6,
                 color="#007BFF" if is_selected else color, 
-                fill=True, 
-                fillOpacity=1 if is_selected else 0.9, 
+                fill=True, fillOpacity=1 if is_selected else 0.9, 
                 weight=3 if is_selected else 1,
                 fillColor="#007BFF" if is_selected else color,
-                children=[
-                    dl.Tooltip(row['name']), # Mały dymek nazwy przy najechaniu
-                    dl.Popup([html.B(row['name']), html.Br(), display_text])
-                ]
+                children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
             )
             if is_selected:
                 selected_marker_osm = m
             else:
                 interactive_points.append(m)
-                
         else:
-            if not czy_brak_danych:
-                heat_blobs.append(
-                    dl.Circle(
-                        id=f"blob-{row['id']}", 
-                        center=[lat, lon], 
-                        radius=15000, 
-                        fillColor=color, color="transparent", 
-                        fill=True, 
-                        fillOpacity=0.2, 
-                        interactive=False
-                    )
-                )
+            if val > 0:
+                intensity = min(val / t[1], 1.0) 
+                heat_data.append([row['lat'], row['lon'], intensity])
+
             m = dl.CircleMarker(
                 id=unique_id_dict, 
-                center=[lat, lon], 
-                radius=8 if is_selected else promien_heat, 
+                center=[row['lat'], row['lon']], radius=3, 
                 color="#007BFF" if is_selected else "#333", 
                 fillColor="#007BFF" if is_selected else color, 
-                fillOpacity=1, 
-                weight=2 if is_selected else 1,
+                fillOpacity=1, weight=2 if is_selected else 1,
                 children=[
-                    dl.Tooltip(row['name']),
-                    dl.Popup([html.B(row['name']), html.Br(), display_text])
+                    dl.Tooltip(row['name'], permanent=False, direction="top", offset=[0, -10]),
+                    dl.Popup([html.B(row['name']), html.Br(), display_text]) 
                 ]
             )
             if is_selected:
@@ -506,12 +484,20 @@ def update_map_elements(pollutant, tab, trigger, selected_station):
                 interactive_points.append(m)
 
     if tab == 'tab-heatmap':
-        children.append(dl.LayerGroup(heat_blobs))
-        
-    # Doklejamy wyróżnione markery na samym końcu żeby były ponad innymi
-    if selected_marker_osm: interactive_points.append(selected_marker_osm)
-    if selected_marker_heat: interactive_points.append(selected_marker_heat)
-        
+        children.append(
+            dl.Heatmap(
+                data=heat_data,
+                max=1.0,
+                radius=25, 
+                blur=15
+            )
+        )
+
+    if selected_marker_osm:
+        interactive_points.append(selected_marker_osm)
+    if selected_marker_heat:
+        interactive_points.append(selected_marker_heat)
+
     children.append(dl.LayerGroup(interactive_points))
     
     legend_html = html.Div([
