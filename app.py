@@ -400,7 +400,7 @@ def update_map_elements(pollutant, tab, trigger):
     if tab != 'tab-stations':
         children.append(dl.GeoJSON(url=POLAND_BORDER, style={'color': '#888', 'fillOpacity': 0, 'weight': 2}))
 
-    heat_data = [] 
+    heat_blobs = [] 
     interactive_points = []
 
     for _, row in temp_df.iterrows():
@@ -423,40 +423,32 @@ def update_map_elements(pollutant, tab, trigger):
                 )
             )
         else:
-            if val > 0:
-                intensity = float(min(val / t[1], 1.0)) 
-                heat_data.append([lat, lon, intensity])
-
+            heat_blobs.append(
+                dl.Circle(
+                    id=f"blob-{unique_id}", 
+                    center=[lat, lon], 
+                    radius=65000, 
+                    fillColor=color, color="transparent", 
+                    fill=True, 
+                    fillOpacity=0.2, 
+                    interactive=False
+                )
+            )
             interactive_points.append(
                 dl.CircleMarker(
                     id=f"point-{unique_id}", 
                     center=[lat, lon], radius=3, 
                     color="#333", fillColor=color, fillOpacity=1, weight=1,
                     children=[
-                        dl.Tooltip(row['name'], permanent=False, direction="top", offset=[0, -10]),
+                        dl.Tooltip(row['name'], permanent=True, direction="top", offset=[0, -10]),
                         dl.Popup([html.B(row['name']), html.Br(), display_text]) 
                     ]
                 )
             )
 
     if tab == 'tab-heatmap':
-        children.append(
-            dl.Heatmap(
-                data=heat_data,
-                max=1.0,
-                radius=40,
-                blur=25,
-                minOpacity=0.3,
-                gradient={
-                    "0.1": "blue",
-                    "0.4": "cyan",
-                    "0.6": "lime",
-                    "0.8": "yellow",
-                    "1.0": "red"
-                }
-            )
-        )
-
+        children.append(dl.LayerGroup(heat_blobs))
+        
     children.append(dl.LayerGroup(interactive_points))
     
     legend_html = html.Div([
