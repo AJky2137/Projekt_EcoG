@@ -426,31 +426,38 @@ def update_map_elements(pollutant, tab, trigger):
         lat = float(row['lat'])
         lon = float(row['lon'])
         
+        # --- ZMIANA: Dynamiczne promienie punktów zależne od dostępności danych ---
+        czy_brak_danych = (val == 0.0)
+        promien_osm = 2 if czy_brak_danych else 6     
+        promien_heat = 1.5 if czy_brak_danych else 3  
+        
         if tab == 'tab-stations':
             interactive_points.append(
                 dl.CircleMarker(
                     id=unique_id, 
-                    center=[lat, lon], radius=6,
+                    center=[lat, lon], radius=promien_osm,
                     color=color, fill=True, fillOpacity=0.9, weight=1,
                     children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
                 )
             )
         else:
-            heat_blobs.append(
-                dl.Circle(
-                    id=f"blob-{unique_id}", 
-                    center=[lat, lon], 
-                    radius=15000, 
-                    fillColor=color, color="transparent", 
-                    fill=True, 
-                    fillOpacity=0.2, 
-                    interactive=False
+            # Nie dodajemy szarej plamy 15km dla punktów bez danych
+            if not czy_brak_danych:
+                heat_blobs.append(
+                    dl.Circle(
+                        id=f"blob-{unique_id}", 
+                        center=[lat, lon], 
+                        radius=15000, 
+                        fillColor=color, color="transparent", 
+                        fill=True, 
+                        fillOpacity=0.2, 
+                        interactive=False
+                    )
                 )
-            )
             interactive_points.append(
                 dl.CircleMarker(
                     id=f"point-{unique_id}", 
-                    center=[lat, lon], radius=3, 
+                    center=[lat, lon], radius=promien_heat, 
                     color="#333", fillColor=color, fillOpacity=1, weight=1,
                     children=[
                         dl.Popup([html.B(row['name']), html.Br(), display_text])
