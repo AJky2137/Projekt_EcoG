@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import dash
-from dash import dcc, html, dash_table, Input, Output, clientside_callback, ctx, Patch
+from dash import dcc, html, dash_table, Input, Output, clientside_callback, ctx, Patch, State
 import dash_leaflet as dl
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -9,21 +9,24 @@ import plotly.express as px
 import requests
 import datetime
 import time
+import threading
 
 # POBIERACZ DANYCH Z GIOŚ
-def pobierz_dzisiejsze_dane():
+def update_status_file(text):
+    with open("status.txt", "w", encoding="utf-8") as f:
+        f.write(text)
+
+def read_status_file():
+    if not os.path.exists("status.txt"):
+        return ""
+    with open("status.txt", "r", encoding="utf-8") as f:
+        return f.read()
+
+def tlo_pobieranie():
+    update_status_file("Inicjalizacja pobierania...")
     file_path = 'baza_powietrza_polska3.csv'
     dzisiejsza_data = datetime.date.today().strftime('%Y-%m-%d')
     
-    if os.path.exists(file_path):
-        try:
-            df_check = pd.read_csv(file_path)
-            if 'date' in df_check.columns and dzisiejsza_data in df_check['date'].values:
-                return "Aktualne dane są już pobrane."
-        except Exception:
-            pass 
-
-    print("\n--- ROZPOCZĘTO POBIERANIE W TLE (CAŁA POLSKA) ---")
     API_BASE = "https://api.gios.gov.pl/pjp-api/v1/rest"
     HEADERS = {
         "Accept": "application/json, text/plain, */*",
@@ -50,7 +53,7 @@ def pobierz_dzisiejsze_dane():
         return None
 
     try:
-        print("Łączenie z serwerem i pobieranie listy stacji...")
+        update_status_file("Łączenie z serwerem GIOŚ...")
         res = requests.get(f"{API_BASE}/station/findAll?size=500", headers=HEADERS)
         res.raise_for_status()
         stations = wyciagnij_liste(res.json())
@@ -59,7 +62,8 @@ def pobierz_dzisiejsze_dane():
         total_stations = len(stations)
 
         if total_stations == 0:
-            return "Błąd: Pusta odpowiedź z API GIOŚ!"
+            update_status_file("Błąd: Pusta odpowiedź API.")
+            return
 
         for index, station in enumerate(stations):
             st_id = znajdz_wartosc(station, ["identyfikator stacji", "stationid", "id"])
@@ -78,7 +82,9 @@ def pobierz_dzisiejsze_dane():
                  city_name = station_name.split(',')[0].split('-')[0].strip()
 
             if st_id and lat and lon and station_name:
-                print(f"[{index+1}/{total_stations}] Przetwarzam: {station_name}")
+                # WYSYŁAMY STATUS DO PLIKU (Odświeża się w UI)
+                update_status_file(f"Pobieranie stacji {index+1}/{total_stations}...")
+                
                 station_data = {
                     "id": int(st_id),
                     "city": city_name,
@@ -134,26 +140,23 @@ def pobierz_dzisiejsze_dane():
 
                 data.append(station_data)
 
-        if len(data) == 0:
-            return "Błąd: Brak danych ze stacji."
-        else:
+        if len(data) > 0:
             df = pd.DataFrame(data)
             if os.path.exists(file_path):
                 df.to_csv(file_path, mode='a', header=False, index=False, encoding='utf-8-sig')
             else:
                 df.to_csv(file_path, index=False, encoding='utf-8-sig')
-            print("ZAKOŃCZONO POBIERANIE SUKCESEM")
-            return "Ukończono!"
+            update_status_file("ZAKOŃCZONO")
+        else:
+            update_status_file("Błąd: Brak odczytów z maszyn.")
 
     except Exception as e:
-        print(f"Błąd sieciowy w tle: {e}")
-        return "Błąd połączenia sieciowego."
+        update_status_file(f"Błąd sieciowy.")
 
 # ODCZYT BAZY DO PAMIĘCI
 def wczytaj_dane_z_csv():
     file_path = 'baza_powietrza_polska3.csv'
     if not os.path.exists(file_path):
-        print("INFO: Brak pliku bazy, aplikacja startuje pusta.")
         return pd.DataFrame(), []
     try:
         df_raw = pd.read_csv(file_path)
@@ -208,9 +211,9 @@ color_mode_switch = html.Span(
 
 #  LAYOUT 
 app.layout = dbc.Container([
+    dcc.Store(id='trigger-update', data=0), # Magazyn wyzwalający odświeżenie map
     
     html.Div([
-        
         html.Div([
             html.Img(src="/assets/logo_ecog.png", style={'height': '70px', 'marginRight': '15px'}),
             html.H2("EcoG", style={'fontWeight': 'bold', 'margin': '0'})
@@ -220,12 +223,8 @@ app.layout = dbc.Container([
             color_mode_switch,
             html.Div([
                 dbc.Button([html.I(className="fa fa-download me-2"), "Pobierz dane"], id="download-btn", color="success", size="md"),
-                dcc.Loading(
-                    id="loading-download",
-                    type="circle",
-                    color="#2ECC71",
-                    children=html.Div(id="download-status", style={'fontWeight': 'bold', 'color': '#2ECC71', 'marginTop': '5px', 'fontSize': '12px', 'textAlign': 'center'})
-                )
+                dcc.Interval(id='status-interval', interval=2000, n_intervals=0, disabled=True),
+                html.Div(id="download-status", style={'fontWeight': 'bold', 'color': '#2ECC71', 'marginTop': '5px', 'fontSize': '12px', 'textAlign': 'center'})
             ], style={'marginLeft': '25px', 'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center'})
         ], style={'display': 'flex', 'alignItems': 'flex-start'})
         
@@ -297,32 +296,76 @@ clientside_callback(
     Input("switch", "value"),
 )
 
+# 1. AKCJA: KLIKNIĘCIE PRZYCISKU POBIERZ
 @app.callback(
-    [Output("download-status", "children"),
-     Output("station-dropdown", "options"),
-     Output("station-dropdown", "value")],
-    Input("download-btn", "n_clicks"),
+    Output('status-interval', 'disabled'),
+    Input('download-btn', 'n_clicks'),
     prevent_initial_call=True
 )
-def handle_download(n_clicks):
-    if not n_clicks:
-        return dash.no_update, dash.no_update, dash.no_update
+def start_download(n_clicks):
+    if not n_clicks: return True
     
-    status_msg = pobierz_dzisiejsze_dane()
-    df_fresh, _ = wczytaj_dane_z_csv()
-    options = [{'label': row['name'], 'value': row['id']} for _, row in df_fresh.iterrows()] if not df_fresh.empty else []
-    val = df_fresh.iloc[0]['id'] if not df_fresh.empty else 0
-    return status_msg, options, val
+    file_path = 'baza_powietrza_polska3.csv'
+    dzisiejsza_data = datetime.date.today().strftime('%Y-%m-%d')
+    if os.path.exists(file_path):
+        try:
+            df_check = pd.read_csv(file_path)
+            if 'date' in df_check.columns and dzisiejsza_data in df_check['date'].values:
+                update_status_file("Aktualne dane są już pobrane.")
+                return False # Otwiera interwał na 1 cykl żeby odczytać komunikat
+        except:
+            pass
+            
+    threading.Thread(target=tlo_pobieranie).start()
+    return False # Uruchamia odpytywanie pliku
 
+# 2. AKCJA: CZYTANIE STATUSU Z PLIKU (POLLING)
+@app.callback(
+    [Output('download-status', 'children'),
+     Output('status-interval', 'disabled', allow_duplicate=True),
+     Output('trigger-update', 'data')],
+    Input('status-interval', 'n_intervals'),
+    State('trigger-update', 'data'),
+    prevent_initial_call=True
+)
+def update_status_text(n, current_trigger):
+    status = read_status_file()
+    
+    if status == "ZAKOŃCZONO":
+        return html.Span([html.I(className="fa fa-check me-2"), "Ukończono!"]), True, current_trigger + 1
+    elif status == "Aktualne dane są już pobrane.":
+        return html.Span([html.I(className="fa fa-info-circle me-2"), status]), True, current_trigger
+    elif "Błąd" in status:
+        return html.Span([html.I(className="fa fa-exclamation-triangle me-2"), status], style={'color': 'red'}), True, current_trigger
+    elif status:
+        return html.Span([html.I(className="fa fa-spinner fa-spin me-2"), status]), False, current_trigger
+    else:
+        return "", False, current_trigger
+
+# 3. AKCJA: AKTUALIZACJA LISTY ROZWIJANEJ
+@app.callback(
+    [Output("station-dropdown", "options"),
+     Output("station-dropdown", "value")],
+    Input('trigger-update', 'data'),
+    State("station-dropdown", "value")
+)
+def update_dropdown(trigger, current_val):
+    temp_df, _ = wczytaj_dane_z_csv()
+    if temp_df.empty: return [], dash.no_update
+    options = [{'label': row['name'], 'value': row['id']} for _, row in temp_df.iterrows()]
+    val = current_val if current_val in temp_df['id'].values else temp_df.iloc[0]['id']
+    return options, val
+
+# 4. AKCJA: AKTUALIZACJA MAPY I RANKINGU
 @app.callback(
     [Output('map-res', 'children'),
      Output('ranking-table', 'data'),
      Output('dynamic-legend', 'children')], 
     [Input('pollutant-dropdown', 'value'),
      Input('map-tabs', 'value'),
-     Input('download-status', 'children')] 
+     Input('trigger-update', 'data')] 
 )
-def update_map_elements(pollutant, tab, download_status):
+def update_map_elements(pollutant, tab, trigger):
     temp_df, _ = wczytaj_dane_z_csv()
     
     if temp_df.empty:
@@ -363,10 +406,8 @@ def update_map_elements(pollutant, tab, download_status):
 
     safe_table_data = table_data[['name', 'display_val', 'display_trend', 'rank_change_str']]
 
-    children = []
-    if tab == 'tab-stations':
-        children.append(dl.TileLayer())
-    else:
+    children = [dl.TileLayer()]
+    if tab != 'tab-stations':
         children.append(dl.GeoJSON(url=POLAND_BORDER, style={'color': '#888', 'fillOpacity': 0, 'weight': 2}))
 
     heat_data = [] 
@@ -397,11 +438,7 @@ def update_map_elements(pollutant, tab, download_status):
                 dl.CircleMarker(
                     id=f"point-{unique_id}", 
                     center=[row['lat'], row['lon']], radius=3, 
-                    color="#333", fillColor=color, fillOpacity=1, weight=1,
-                    children=[
-                        dl.Tooltip(row['name'], permanent=False, direction="top", offset=[0, -10]),
-                        dl.Popup([html.B(row['name']), html.Br(), display_text]) 
-                    ]
+                    color="#333", fillColor=color, fillOpacity=1, weight=1
                 )
             )
 
@@ -418,7 +455,7 @@ def update_map_elements(pollutant, tab, download_status):
     children.append(dl.LayerGroup(interactive_points))
     
     legend_html = html.Div([
-        html.P("Legenda:", style={'fontWeight': 'bold'}),
+        html.P("Legenda (zgodnie z normami):", style={'fontWeight': 'bold'}),
         html.Div([html.Span("●", style={'color': '#2ECC71'}), f" Dobra (<= {t[0]})"]),
         html.Div([html.Span("●", style={'color': '#F39C12'}), f" Umiarkowana ({t[0]} - {t[1]})"]),
         html.Div([html.Span("●", style={'color': '#E74C3C'}), f" Zła (> {t[1]})"]),
@@ -426,24 +463,25 @@ def update_map_elements(pollutant, tab, download_status):
     ])
     return children, safe_table_data.to_dict('records'), legend_html
 
+# 5. AKCJA: AKTUALIZACJA WYKRESU
 @app.callback(
     Output('history-chart', 'figure'),
     [Input('pollutant-dropdown', 'value'),
      Input('station-dropdown', 'value'),
      Input('switch', 'value'),
-     Input('download-status', 'children')] 
+     Input('trigger-update', 'data')] 
 )
-def update_chart(pollutant, station_id, is_light_mode, download_status):
+def update_chart(pollutant, station_id, is_light_mode, trigger):
     temp_df, dates = wczytaj_dane_z_csv()
     
     if temp_df.empty:
         return px.line(title="Brak danych do wyświetlenia")
 
-    trigger = ctx.triggered_id
+    trigger_id = ctx.triggered_id
     text_color = '#000' if is_light_mode else '#fff'
     grid_color = '#eee' if is_light_mode else '#555'
     line_color = '#c0392b' if is_light_mode else '#e74c3c'
-    if trigger == 'switch':
+    if trigger_id == 'switch':
         patched_figure = Patch()
         patched_figure["layout"]["font"]["color"] = text_color
         patched_figure["layout"]["xaxis"]["gridcolor"] = grid_color
