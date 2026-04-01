@@ -5,3 +5,5 @@ pandas
 plotly
 requests
 gunicorn
+SQLAlchemy
+psycopg2-binary
