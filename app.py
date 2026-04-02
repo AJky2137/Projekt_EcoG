@@ -12,7 +12,6 @@ import time
 import threading
 from sqlalchemy import create_engine
 
-# --- KONFIGURACJA BAZY DANYCH ---
 LOKALNY_URL_BAZY = "postgresql://ecog_db_user:EicIZA5p5bMVtiv86K2ox82hCc5S6qEZ@dpg-d76enj8ule4c73eskkag-a.frankfurt-postgres.render.com/ecog_db"
 
 db_url = os.environ.get('DATABASE_URL', LOKALNY_URL_BAZY)
@@ -246,9 +245,9 @@ app.layout = dbc.Container([
                 options=[
                     {'label': 'Pyły (PM10)', 'value': 'pm10'},
                     {'label': 'Pyły (PM2.5)', 'value': 'pm25'},
-                    {'label': 'Azot (NO2)', 'value': 'no2'},
-                    {'label': 'Siarka (SO2)', 'value': 'so2'},
-                    {'label': 'Węgiel (CO)', 'value': 'co'},
+                    {'label': 'Tlenek azotu (NO2)', 'value': 'no2'},
+                    {'label': 'Tlenek siarki (SO2)', 'value': 'so2'},
+                    {'label': 'Tlenek węgla (CO)', 'value': 'co'},
                 ], value='pm10', clearable=False, style={'color': '#000'}
             ),
             html.Hr(),
@@ -426,7 +425,6 @@ def update_map_elements(pollutant, tab, trigger):
         lat = float(row['lat'])
         lon = float(row['lon'])
         
-        # --- ZMIANA: Dynamiczne promienie punktów zależne od dostępności danych ---
         czy_brak_danych = (val == 0.0)
         promien_osm = 2 if czy_brak_danych else 6     
         promien_heat = 1.5 if czy_brak_danych else 3  
@@ -441,7 +439,6 @@ def update_map_elements(pollutant, tab, trigger):
                 )
             )
         else:
-            # Nie dodajemy szarej plamy 15km dla punktów bez danych
             if not czy_brak_danych:
                 heat_blobs.append(
                     dl.Circle(
@@ -471,7 +468,7 @@ def update_map_elements(pollutant, tab, trigger):
     children.append(dl.LayerGroup(interactive_points))
     
     legend_html = html.Div([
-        html.P("Legenda (zgodnie z normami):", style={'fontWeight': 'bold'}),
+        html.P("Legenda:", style={'fontWeight': 'bold'}),
         html.Div([html.Span("●", style={'color': '#2ECC71'}), f" Dobra (<= {t[0]})"]),
         html.Div([html.Span("●", style={'color': '#F39C12'}), f" Umiarkowana ({t[0]} - {t[1]})"]),
         html.Div([html.Span("●", style={'color': '#E74C3C'}), f" Zła (> {t[1]})"]),
