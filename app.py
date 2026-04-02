@@ -12,6 +12,7 @@ import time
 import threading
 from sqlalchemy import create_engine
 
+#KONFIGURACJA BAZY DANYCH
 LOKALNY_URL_BAZY = "postgresql://ecog_db_user:EicIZA5p5bMVtiv86K2ox82hCc5S6qEZ@dpg-d76enj8ule4c73eskkag-a.frankfurt-postgres.render.com/ecog_db"
 
 db_url = os.environ.get('DATABASE_URL', LOKALNY_URL_BAZY)
@@ -245,9 +246,9 @@ app.layout = dbc.Container([
                 options=[
                     {'label': 'Pyły (PM10)', 'value': 'pm10'},
                     {'label': 'Pyły (PM2.5)', 'value': 'pm25'},
-                    {'label': 'Tlenek azotu (NO2)', 'value': 'no2'},
-                    {'label': 'Tlenek siarki (SO2)', 'value': 'so2'},
-                    {'label': 'Tlenek węgla (CO)', 'value': 'co'},
+                    {'label': 'Azot (NO2)', 'value': 'no2'},
+                    {'label': 'Siarka (SO2)', 'value': 'so2'},
+                    {'label': 'Węgiel (CO)', 'value': 'co'},
                 ], value='pm10', clearable=False, style={'color': '#000'}
             ),
             html.Hr(),
@@ -269,8 +270,8 @@ app.layout = dbc.Container([
 
         html.Div([
             dcc.Tabs(id="map-tabs", value='tab-stations', children=[
-                dcc.Tab(label='OSM', value='tab-stations'),
-                dcc.Tab(label='Heatmap', value='tab-heatmap'),
+                dcc.Tab(label='Mapa lokalizacji stacji', value='tab-stations'),
+                dcc.Tab(label='Mapa jakości powietrza', value='tab-heatmap'),
             ]),
             dl.Map(id="map-res", center=[52.1, 19.4], zoom=6, style={'height': '45vh', 'marginBottom': '10px', 'backgroundColor': '#e8e8e8'}),
             html.Div([
@@ -362,11 +363,14 @@ def update_dropdown(trigger, current_val):
      Output('dynamic-legend', 'children')], 
     [Input('pollutant-dropdown', 'value'),
      Input('map-tabs', 'value'),
-     Input('trigger-update', 'data')] 
+     Input('trigger-update', 'data'),
+     Input('map-res', 'zoom')] 
 )
-def update_map_elements(pollutant, tab, trigger):
+def update_map_elements(pollutant, tab, trigger, zoom):
     temp_df, _ = wczytaj_dane_z_bazy()
     
+    zoom = zoom or 6
+
     if temp_df.empty:
         return [dl.TileLayer(url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png")], [], html.Div()
 
@@ -414,6 +418,8 @@ def update_map_elements(pollutant, tab, trigger):
 
     heat_blobs = [] 
     interactive_points = []
+    
+    promien_kola_heatmapy = max(1000, 15000 - (zoom - 6) * 2800)
 
     for _, row in temp_df.iterrows():
         val = float(row['today_val'])
@@ -444,7 +450,7 @@ def update_map_elements(pollutant, tab, trigger):
                     dl.Circle(
                         id=f"blob-{unique_id}", 
                         center=[lat, lon], 
-                        radius=15000, 
+                        radius=promien_kola_heatmapy, 
                         fillColor=color, color="transparent", 
                         fill=True, 
                         fillOpacity=0.2, 
@@ -468,7 +474,7 @@ def update_map_elements(pollutant, tab, trigger):
     children.append(dl.LayerGroup(interactive_points))
     
     legend_html = html.Div([
-        html.P("Legenda:", style={'fontWeight': 'bold'}),
+        html.P("Legenda (zgodnie z normami):", style={'fontWeight': 'bold'}),
         html.Div([html.Span("●", style={'color': '#2ECC71'}), f" Dobra (<= {t[0]})"]),
         html.Div([html.Span("●", style={'color': '#F39C12'}), f" Umiarkowana ({t[0]} - {t[1]})"]),
         html.Div([html.Span("●", style={'color': '#E74C3C'}), f" Zła (> {t[1]})"]),
