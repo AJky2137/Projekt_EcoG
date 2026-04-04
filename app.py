@@ -507,7 +507,6 @@ def update_map_elements(pollutant, tab, trigger, zoom, selected_station):
     if selected_marker_osm: interactive_points.append(selected_marker_osm)
     if selected_marker_heat: interactive_points.append(selected_marker_heat)
         
-    # Nadajemy dynamiczne ID warstwie grupującej punkty, by wymusić jej przerysowanie przy każdej zmianie
     children.append(dl.LayerGroup(interactive_points, id=f"markers-layer-{selected_station_id}-{pollutant}-{tab}"))
     
     legend_html = html.Div([
@@ -536,6 +535,7 @@ def update_chart(pollutant, station_id, is_light_mode, trigger):
     text_color = '#000' if is_light_mode else '#fff'
     grid_color = '#eee' if is_light_mode else '#555'
     line_color = '#c0392b' if is_light_mode else '#e74c3c'
+    
     if trigger_id == 'switch':
         patched_figure = Patch()
         patched_figure["layout"]["font"]["color"] = text_color
@@ -551,21 +551,48 @@ def update_chart(pollutant, station_id, is_light_mode, trigger):
     row = temp_df[temp_df['id'] == station_id].iloc[0]
     y_data = row['history'][pollutant]
     unit = "mg/m³" if pollutant == 'co' else "µg/m³"
+    
+    avg_data = []
+    histories = temp_df['history'].apply(lambda h: h[pollutant]).tolist()
+    for i in range(len(dates)):
+        vals = [h[i] for h in histories if i < len(h)]
+        if vals:
+            avg_data.append(round(sum(vals)/len(vals), 2))
+        else:
+            avg_data.append(0)
+
     fig = px.line(
         x=dates, y=y_data, 
         markers=True, 
         title=f"Wartości {pollutant.upper()} - {row['name']}",
         labels={'x': 'Data', 'y': f'Stężenie [{unit}]'}
     )
+    
+    fig.add_scatter(
+        x=dates, 
+        y=avg_data,
+        mode='lines+markers',
+        name='Średnia krajowa',
+        line=dict(color='#f1c40f', dash='dash', width=2),
+        marker=dict(symbol='circle', size=6)
+    )
+
     fig.update_layout(
         margin={'l': 40, 'r': 20, 't': 40, 'b': 30},
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
         font_color=text_color,
         xaxis=dict(showgrid=True, gridcolor=grid_color, tickformat="%Y-%m-%d"),
-        yaxis=dict(showgrid=True, gridcolor=grid_color)
+        yaxis=dict(showgrid=True, gridcolor=grid_color),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, title="")
     )
-    fig.update_traces(line_color=line_color, marker=dict(size=8))
+    
+    fig.data[0].name = row['name']
+    fig.data[0].showlegend = True
+    fig.data[0].line.color = line_color
+    fig.data[0].marker.color = line_color
+    fig.data[0].marker.size = 8
+
     return fig
 
 if __name__ == '__main__':
