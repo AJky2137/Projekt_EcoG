@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import dash
-from dash import dcc, html, dash_table, Input, Output, clientside_callback, ctx, Patch, State
+from dash import dcc, html, dash_table, Input, Output, clientside_callback, ctx, Patch, State, ALL
 import dash_leaflet as dl
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -357,6 +357,22 @@ def update_dropdown(trigger, current_val):
     val = current_val if current_val in temp_df['id'].values else temp_df.iloc[0]['id']
     return options, val
 
+# --- FUNKCJA KLIKNIĘCIA W MAPĘ ---
+@app.callback(
+    Output('station-dropdown', 'value', allow_duplicate=True),
+    Input({'type': 'station-marker', 'index': ALL}, 'n_clicks'),
+    prevent_initial_call=True
+)
+def map_click(n_clicks_list):
+    if not ctx.triggered:
+        raise dash.exceptions.PreventUpdate
+    trigger = ctx.triggered[0]
+    if trigger['value']: 
+        triggered_id = ctx.triggered_id
+        if isinstance(triggered_id, dict):
+            return triggered_id['index']
+    raise dash.exceptions.PreventUpdate
+
 @app.callback(
     [Output('map-res', 'children'),
      Output('ranking-table', 'data'),
@@ -364,9 +380,10 @@ def update_dropdown(trigger, current_val):
     [Input('pollutant-dropdown', 'value'),
      Input('map-tabs', 'value'),
      Input('trigger-update', 'data'),
-     Input('map-res', 'zoom')] 
+     Input('map-res', 'zoom'),
+     Input('station-dropdown', 'value')] # Mapa teraz widzi, co wybrałeś w dropdownie
 )
-def update_map_elements(pollutant, tab, trigger, zoom):
+def update_map_elements(pollutant, tab, trigger, zoom, selected_station):
     temp_df, _ = wczytaj_dane_z_bazy()
     
     zoom = zoom or 6
@@ -419,6 +436,15 @@ def update_map_elements(pollutant, tab, trigger, zoom):
     heat_blobs = [] 
     interactive_points = []
     
+    # Wyłapujemy ID wybranej stacji by użyć go w pętli
+    try:
+        selected_station_id = int(selected_station)
+    except:
+        selected_station_id = -1
+        
+    selected_marker_osm = None
+    selected_marker_heat = None
+    
     promien_kola_heatmapy = max(1000, 15000 - (zoom - 6) * 2800)
 
     for _, row in temp_df.iterrows():
@@ -426,7 +452,10 @@ def update_map_elements(pollutant, tab, trigger, zoom):
         color = get_color(val)
         unit = "mg/m³" if pollutant == 'co' else "µg/m³"
         display_text = f"{pollutant.upper()}: {val} {unit}"
-        unique_id = f"marker-{row['id']}-{pollutant}-{tab}"
+        
+        # Tworzymy unikalne, klikalne ID
+        unique_id_dict = {'type': 'station-marker', 'index': int(row['id'])}
+        is_selected = (int(row['id']) == selected_station_id)
         
         lat = float(row['lat'])
         lon = float(row['lon'])
@@ -435,20 +464,25 @@ def update_map_elements(pollutant, tab, trigger, zoom):
         promien_osm = 2 if czy_brak_danych else 6     
         promien_heat = 1.5 if czy_brak_danych else 3  
         
+        marker_color = "#007BFF" if is_selected else color
+        
         if tab == 'tab-stations':
-            interactive_points.append(
-                dl.CircleMarker(
-                    id=unique_id, 
-                    center=[lat, lon], radius=promien_osm,
-                    color=color, fill=True, fillOpacity=0.9, weight=1,
-                    children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
-                )
+            m = dl.CircleMarker(
+                id=unique_id_dict, 
+                center=[lat, lon], radius=promien_osm,
+                color=marker_color, fill=True, fillOpacity=1 if is_selected else 0.9, weight=3 if is_selected else 1,
+                fillColor=marker_color,
+                children=[dl.Popup([html.B(row['name']), html.Br(), display_text])]
             )
+            if is_selected:
+                selected_marker_osm = m
+            else:
+                interactive_points.append(m)
         else:
             if not czy_brak_danych:
                 heat_blobs.append(
                     dl.Circle(
-                        id=f"blob-{unique_id}", 
+                        id=f"blob-{row['id']}", 
                         center=[lat, lon], 
                         radius=promien_kola_heatmapy, 
                         fillColor=color, color="transparent", 
@@ -457,19 +491,25 @@ def update_map_elements(pollutant, tab, trigger, zoom):
                         interactive=False
                     )
                 )
-            interactive_points.append(
-                dl.CircleMarker(
-                    id=f"point-{unique_id}", 
-                    center=[lat, lon], radius=promien_heat, 
-                    color="#333", fillColor=color, fillOpacity=1, weight=1,
-                    children=[
-                        dl.Popup([html.B(row['name']), html.Br(), display_text])
-                    ]
-                )
+            m = dl.CircleMarker(
+                id=unique_id_dict, 
+                center=[lat, lon], radius=promien_heat, 
+                color="#007BFF" if is_selected else "#333", fillColor=marker_color, fillOpacity=1, weight=2 if is_selected else 1,
+                children=[
+                    dl.Popup([html.B(row['name']), html.Br(), display_text])
+                ]
             )
+            if is_selected:
+                selected_marker_heat = m
+            else:
+                interactive_points.append(m)
 
     if tab == 'tab-heatmap':
         children.append(dl.LayerGroup(heat_blobs))
+        
+    # Doklejamy wybraną stację jako ostatnią, by upewnić się, że nie zasłonią jej inne kropki!
+    if selected_marker_osm: interactive_points.append(selected_marker_osm)
+    if selected_marker_heat: interactive_points.append(selected_marker_heat)
         
     children.append(dl.LayerGroup(interactive_points))
     
