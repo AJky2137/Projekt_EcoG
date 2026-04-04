@@ -574,7 +574,8 @@ def update_chart(pollutant, station_id, is_light_mode, trigger):
         mode='lines+markers',
         name='Średnia krajowa',
         line=dict(color='#f1c40f', dash='dash', width=2),
-        marker=dict(symbol='circle', size=6)
+        marker=dict(symbol='circle', size=6),
+        hovertemplate=f"Data=%{{x}}<br>Stężenie [{unit}]=%{{y}}<extra></extra>"
     )
 
     fig.update_layout(
